@@ -87,7 +87,7 @@ function evaluate_phi(sample, basis_locs, φ, ϵ)
     n_bases = size(basis_locs, 1)
     sample_size = size(sample, 1)
 
-    Φ = zeros(n_bases, sample_size)
+    Φ = Array{Float64}(undef, n_bases, sample_size);
     for b in 1:n_bases
         for n in 1:sample_size
             Φ[b, n] = φ(sample[n, :], basis_locs[b,:], ϵ);
@@ -204,4 +204,4 @@ function estimate_L(state_space, sample_size, S, φ, ϵ, basis_grid_size, integr
 
     L = construct_L(w, Φ, Ξ, c)
     return L
-end
+end;
