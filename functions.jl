@@ -23,14 +23,14 @@ function creategrid(min::Number, max::Number, resolution::Int64)
 end;
 
 """
-    f_0(x, range; dist)
+    f(x, range; dist)
 
-Returns a density evaluation of `x` for some initial density f0.
+Returns a density evaluation of `x` for some density.
 
 Output is a pdf of `dist` evaluated at `x`.
 
 """
-function f0(x, range::Number; dist="uniform")
+function f(x::Vector{Float64}, range::Number; dist="uniform")
     if dist == "normal"
         d = MvNormal([range/2, range/2], 1)
         return pdf(d, x)
@@ -44,12 +44,12 @@ end;
 """
     sampledist(sample_size, width; dist)
 
-Returns a sample from the nominated distribution `dist, of size `sample_size`.
+Returns a sample from the nominated distribution `dist`, of size `sample_size`.
 
 Output is a `sample_size` x 2 matrix.
 
 """
-function sampledist(sample_size, range::Number; dist="uniform")
+function sampledist(sample_size::Integer, range::Number; dist="uniform")
     if dist == "normal"
         d = MvNormal([range/2, range/2], 1);
         sample = rand(d, sample_size)';
@@ -68,7 +68,7 @@ Returns the evaluation of a dynamical map on the matrix of points `X`, according
 Output is a transformed matrix S(X) of same size.
 
 """
-function S(X; map_type)
+function S(X::Array{Float64, 2}; map_type="standard")
     if map_type == "standard"
         a = 6;
         result = [X[:,1] + X[:,2]  X[:,2] + a*sin.(X[:,1] + X[:,2])];
@@ -92,7 +92,7 @@ Returns the result of `S` applied to `X ``n_steps` times, iteratively.
 Output is a transformed matrix S^n(X) of same size.
 
 """
-function S_forward(X, S, n_steps::Int64; map_type)
+function S_forward(X::Array{Float64, 2}, S, n_steps::Int64; map_type)
     for t in 1:n_steps
         X = S(X; map_type);
     end
@@ -107,7 +107,7 @@ Returns the evaluation of ```x``` at the kernel defined by ```z``` and ```ϵ```.
 Output is a real scalar.
 
 """
-φ(x, z, ϵ) =  exp( -1 * ( peuclidean(x, z, [2π, 2π]) / ϵ ) ^ 2 );
+φ(x::Vector{Float64}, z::Vector{Float64}, ϵ::Number) =  exp( -1 * ( peuclidean(x, z, [2π, 2π]) / ϵ ) ^ 2 );
 
 """
     evaluate_phi(sample, basis_locs, φ, ϵ)
@@ -116,9 +116,9 @@ Returns the evaluation matrix of all points in a sample against all basis functi
 
 Output is an m×n matrix, where m is the number of bases and n is the number of data points.
 """
-function evaluate_phi(sample, basis_locs, φ, ϵ)
-    n_bases = size(basis_locs, 1)
-    sample_size = size(sample, 1)
+function evaluate_phi(sample::Array{Float64, 2}, basis_locs::Array{Float64, 2}, φ, ϵ::Number)
+    n_bases = size(basis_locs, 1);
+    sample_size = size(sample, 1);
 
     Φ = Array{Float64}(undef, n_bases, sample_size);
     for b in 1:n_bases
@@ -177,7 +177,7 @@ Constructs the estimated matrix L, using the weights `w`, the sample evaluation 
 
 Returns an m×m matrix, where m is the number of bases.
 """
-function construct_L(w, Φ, Ξ, c)
+function construct_L(w::Vector{Float64}, Φ::Array{Float64, 2}, Ξ::Array{Float64, 2}, c::Number)
     n_bases = size(Φ, 1);
     sample_size = size(Φ, 2);
 
@@ -257,7 +257,7 @@ Computes a weighted sum of all basis functions, according to `alpha`.
 Returns a vector of length n, where n is the number of gridpoints.
 
 """
-function basis_combination(grid, basis_locs, φ, ϵ, α)
+function basis_combination(grid::Array{Float64, 2}, basis_locs::Array{Float64, 2}, φ, ϵ::Number, α::Vector{Float64})
     n_bases = size(basis_locs, 1);
     n_gridpoints = size(grid, 1);
 

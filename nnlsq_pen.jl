@@ -10,19 +10,19 @@ function nnlsq_pen(A, b, x̄, p)
     #    set_optimizer_attribute(model, "Presolve", 0)
 
     n1 = size(A, 1)
-    n2 = size(A, 2) 
-    
+    n2 = size(A, 2)
+
     @variable(model, x[i=1:n2] ≥ 0)
     @variable(model, residual[i=1:n1])
-     
+
     @constraint(model, residual .== A * x - b)
 
     #has to be quadratic penalty below.  Because sum of x ≈ constant and a linear penalty has no effect.  This is why the first penalty and the second penalty yield almost identical results.
     @objective(model, Min, sum(residual.^2).+p*sum((x.-x̄).^2))
     #the above yields almost identical results to the below, but very slightly better in terms of total weight accuracy
     #@objective(model, Min, sum(residual.^2).+penalty*sum(x.^2))
-    
-    # Solve problem 
+
+    # Solve problem
     JuMP.optimize!(model)
     println("Objective value is: ", JuMP.objective_value(model))
 
@@ -30,3 +30,26 @@ function nnlsq_pen(A, b, x̄, p)
 
 end
 
+function nnlsq_pen_weighted(A, b, x̄, p, k)
+    # Minimises \|Ax-b\|^2 + p\|x-x̄\|^2, subject to x≥0, where x̄ is the average value expected in the vector x, and p≥0 is a small scalar penalty, and k is the same
+    # Call with x, residual, objvalue = nnlsq(A, b, x̄, p, k)
+
+    model = Model(Gurobi.Optimizer)
+
+    n1 = size(A, 1)
+    n2 = size(A, 2)
+
+    @variable(model, x[i=1:n2] ≥ 0)
+    @variable(model, residual[i=1:n1])
+
+    @constraint(model, residual .== A * x - b)
+
+    @objective(model, Min, sum(residual.^2) .+ p*sum((x.-x̄).^2) .+ k*(sum(x) - 1)^2)
+
+    # Solve problem
+    JuMP.optimize!(model)
+    println("Objective value is: ", JuMP.objective_value(model))
+
+    return JuMP.value.(x), JuMP.value.(residual), JuMP.objective_value(model)
+
+end
