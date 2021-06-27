@@ -26,7 +26,7 @@ end;
 """
     f(x, range; dist)
 
-Returns a density evaluation of `x` for some density.
+Returns a density evaluation of `x` for some density, according to `dist`.
 
 Output is a pdf of `dist` evaluated at `x`.
 
@@ -43,7 +43,7 @@ function f(x::Vector{Float64}, range::Number; dist="uniform")
 end;
 
 """
-    sampledist(sample_size, width; dist)
+    sampledist(sample_size, range; dist)
 
 Returns a sample from the nominated distribution `dist`, of size `sample_size`.
 
@@ -72,7 +72,9 @@ Output is a transformed matrix S(X) of same size.
 function S(X::Array{Float64, 2}; map_type="standard")
     if map_type == "standard"
         a = 6;
-        result = [X[:,1] + X[:,2]  X[:,2] + a*sin.(X[:,1] + X[:,2])];
+        y = X[:,2] + a * sin.(X[:,1]);
+        x = X[:,1] + y;
+        result = [x y];
         result = mod.(result, 2π);
     elseif map_type == "cat"
         result = [(2 * X[:,1]) + X[:,2]  X[:,1] + X[:,2]];
@@ -93,7 +95,7 @@ Returns the result of `S` applied to `X` `n_steps` times, iteratively.
 Output is a transformed matrix S^n(X) of same size.
 
 """
-function S_forward(X::Array{Float64, 2}, S, n_steps::Int64; map_type)
+function S_forward(X::Array{Float64, 2}, S, n_steps::Int64; map_type="standard")
     for t in 1:n_steps
         X = S(X; map_type);
     end
@@ -113,9 +115,9 @@ Output is a real scalar.
 """
     evaluate_phi(sample, basis_locs, φ, ϵ)
 
-Returns the evaluation matrix of all points in a sample against all basis functions.
+Returns the evaluation matrix of `φ` of all points in `sample` against all basis functions, specified by `basis_locs`.
 
-Output is an m×n matrix, where m is the number of bases and n is the number of data points.
+Output is an m × n matrix, where m is the number of bases and n is the number of data points.
 """
 function evaluate_phi(sample::Array{Float64, 2}, basis_locs::Array{Float64, 2}, φ, ϵ::Number)
     n_bases = size(basis_locs, 1);
@@ -135,7 +137,7 @@ end
 
 Integrates kernels φ centered at the image points `Y` over a Voronoi tesselation of the original `basis_locs`.
 
-Output is an n×m matrix of integral values, where n is the sample size (number of rows in `Y`) and m is the number of bases (number of rows in `basis_locs`)
+Output is an n × m matrix of integral values, where n is the sample size and m is the number of bases.
 
 """
 function integrate_phiy(Y::Array{Float64, 2}, basis_locs::Array{Float64, 2}, range::Number, integral_resolution::Integer, φ, ϵ::Number)
@@ -171,17 +173,17 @@ function integrate_phiy(Y::Array{Float64, 2}, basis_locs::Array{Float64, 2}, ran
 end;
 
 """
-    construct_L(w, Φ, Ξ, c)
+    construct_T(w, Φ, Ξ, c)
 
-Constructs the estimated matrix L, using the weights `w`, the sample evaluation matrix `Φ`, and the integral values `Ξ`, with integral weights `c`.
+Constructs the estimated matrix T, using the weights `w`, the sample evaluation matrix `Φ`, and the integral values `Ξ`, with integral weights `c`.
 
-Returns an m×m matrix, where m is the number of bases.
+Returns an m × m matrix, where m is the number of bases.
 """
-function construct_L(w::Vector{Float64}, Φ::Array{Float64, 2}, Ξ::Array{Float64, 2}, c::Number)
+function construct_T(w::Vector{Float64}, Φ::Array{Float64, 2}, Ξ::Array{Float64, 2}, c::Number)
     n_bases = size(Φ, 1);
     sample_size = size(Φ, 2);
 
-    L = Array{Float64}(undef, n_bases, n_bases);
+    T = Array{Float64}(undef, n_bases, n_bases);
     for b in 1:n_bases
         for k in 1:n_bases
             val = 0;
@@ -189,48 +191,47 @@ function construct_L(w::Vector{Float64}, Φ::Array{Float64, 2}, Ξ::Array{Float6
                 val += w[n] * Φ[b,n] * Ξ[n,k];
             end
             val = (1/(c^2)) * val;
-            L[b,k] = val;
+            T[b,k] = val;
         end
     end
-    return L
+    return T
 end;
 
 """
-    estimate_L(state_space, sample_size, S, φ, ϵ, basis_grid_size, integral_resolution; dist)
+    estimate_T(state_space, sample_size, S, φ, ϵ, basis_grid_size, integral_resolution; dist)
 
-Combines all of the helper functions into a single API for estimating the matrix L.
+Combines all of the helper functions into a single API for estimating the matrix T.
 
-Returns L.
+Returns T.
 
 """
-function estimate_L(state_space, sample_size, S, φ, ϵ, basis_grid_size, integral_resolution; dist="uniform", map_type="standard")
+function estimate_T(grid::Array{Float64, 2}, sample::Array{Float64, 2}, basis_grid_size::Integer, ϵ::Number, range::Number=2π, integral_resolution::Integer=100; map_type="standard")
 
     c = π * ϵ^2;
-    width = state_space["max"] - state_space["min"];
 
-    X = sampledist(sample_size, width; dist)
+    X = sample;
     Y = S(X; map_type);
 
-    basis_locs = creategrid(state_space["min"], state_space["max"], basis_grid_size);
+    basis_locs = creategrid(0, range, basis_grid_size);
     n_bases = basis_grid_size ^ 2;
 
     Φ = evaluate_phi(X, basis_locs, φ, ϵ);
 
     C = c * ones(n_bases);
-    x_av = (width^2)/n_bases;
+    w_av = (range^2)/n_bases;
 
-    w, residual, objvalue = nnlsq_pen(Φ, C, x_av, 0.01);
+    w, residual, objvalue = nnlsq_pen(Φ, C, w_av, 0.01);
 
-    Ξ = integrate_phiy(Y, basis_locs, width, integral_resolution, ϵ);
+    Ξ = integrate_phiy(Y, basis_locs, range, integral_resolution, φ, ϵ);
 
-    L = construct_L(w, Φ, Ξ, c)
-    return L
+    T = construct_T(w, Φ, Ξ, c)
+    return T
 end;
 
 """
     ordered_eigendecomp(M)
 
-Computes a sorted eigendecomposition of M.
+Computes a sorted eigendecomposition of the matrix `M`.
 
 Returns a tuple of (λ, Λ), where λ is the vector of eigenvalues and Λ a the matrix of eigenvectors.
 
@@ -247,7 +248,7 @@ end;
 """
     basis_combination(grid, basis_locs, φ, ϵ, α)
 
-Computes a weighted sum of all basis functions, according to α.
+Computes a weighted sum of all basis functions, according to `α`.
 
 Returns a vector of length n, where n is the number of gridpoints.
 
