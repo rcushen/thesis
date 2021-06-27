@@ -1,5 +1,6 @@
 using LinearAlgebra, Distributions, Distances
 
+include("nnlsq.jl")
 include("nnlsq_pen.jl")
 
 """
@@ -87,7 +88,7 @@ end;
 """
     S_forward(X, S, n_steps; map_type)
 
-Returns the result of `S` applied to `X ``n_steps` times, iteratively.
+Returns the result of `S` applied to `X` `n_steps` times, iteratively.
 
 Output is a transformed matrix S^n(X) of same size.
 
@@ -102,7 +103,7 @@ end;
 """
     φ(x, z, ϵ)
 
-Returns the evaluation of ```x``` at the kernel defined by ```z``` and ```ϵ```.
+Returns the evaluation of `x` at the kernel defined by `z` and `ϵ`, on the flat torus with range 2π.
 
 Output is a real scalar.
 
@@ -137,21 +138,20 @@ Integrates kernels φ centered at the image points `Y` over a Voronoi tesselatio
 Output is an n×m matrix of integral values, where n is the sample size (number of rows in `Y`) and m is the number of bases (number of rows in `basis_locs`)
 
 """
-function integrate_phiy(Y, basis_locs, range::Number, integral_resolution::Integer, ϵ)
+function integrate_phiy(Y::Array{Float64, 2}, basis_locs::Array{Float64, 2}, range::Number, integral_resolution::Integer, φ, ϵ::Number)
     n_fine_gridpoints = integral_resolution ^ 2;
     fine_grid = creategrid(0, range, integral_resolution);
 
     n_bases = size(basis_locs, 1);
     sample_size = size(Y, 1);
 
-    distance_matrix = pairwise(PeriodicEuclidean([range, range]), fine_grid, basis_locs, dims=1)
+    distance_matrix = pairwise(PeriodicEuclidean([range, range]), fine_grid, basis_locs, dims=1);
 
     tile_indexes = argmin(distance_matrix, dims=2);
     tile_indexes = [ind[2] for ind in tile_indexes];
     tile_indexes = tile_indexes[:];
 
     integral_values = Array{Float64}(undef, sample_size, n_bases);
-
     for j in 1:sample_size
         y_j = Y[j,:];
         for b in 1:n_bases
@@ -171,7 +171,7 @@ function integrate_phiy(Y, basis_locs, range::Number, integral_resolution::Integ
 end;
 
 """
-    construct_L(w, Φ, Ξ)
+    construct_L(w, Φ, Ξ, c)
 
 Constructs the estimated matrix L, using the weights `w`, the sample evaluation matrix `Φ`, and the integral values `Ξ`, with integral weights `c`.
 
@@ -188,7 +188,7 @@ function construct_L(w::Vector{Float64}, Φ::Array{Float64, 2}, Ξ::Array{Float6
             for n in 1:sample_size
                 val += w[n] * Φ[b,n] * Ξ[n,k];
             end
-            val = 1/c * val;
+            val = (1/(c^2)) * val;
             L[b,k] = val;
         end
     end
@@ -203,28 +203,23 @@ Combines all of the helper functions into a single API for estimating the matrix
 Returns L.
 
 """
-function estimate_L(state_space, sample_size, S, φ, ϵ, basis_grid_size, integral_resolution; dist)
+function estimate_L(state_space, sample_size, S, φ, ϵ, basis_grid_size, integral_resolution; dist="uniform", map_type="standard")
 
     c = π * ϵ^2;
-
     width = state_space["max"] - state_space["min"];
 
-    if dist == "normal"
-        d = MvNormal([width/2, width/2], 1);
-        sample = rand(d, sample_size)';
-    elseif dist == "uniform"
-        sample = rand(sample_size, 2)
-    end
-
-    X = sample;
-    Y = S(X);
+    X = sampledist(sample_size, width; dist)
+    Y = S(X; map_type);
 
     basis_locs = creategrid(state_space["min"], state_space["max"], basis_grid_size);
     n_bases = basis_grid_size ^ 2;
 
     Φ = evaluate_phi(X, basis_locs, φ, ϵ);
+
     C = c * ones(n_bases);
-    w, residual, objvalue = nnlsq(Φ, C, 0);
+    x_av = (width^2)/n_bases;
+
+    w, residual, objvalue = nnlsq_pen(Φ, C, x_av, 0.01);
 
     Ξ = integrate_phiy(Y, basis_locs, width, integral_resolution, ϵ);
 
@@ -237,12 +232,12 @@ end;
 
 Computes a sorted eigendecomposition of M.
 
-Returns a tuple of (lambda, Lambda), where lambda is the vector of eigenvalues and Lambda is the matrix of eigenvectors.
+Returns a tuple of (λ, Λ), where λ is the vector of eigenvalues and Λ a the matrix of eigenvectors.
 
 """
 function ordered_eigendecomp(M)
-    λ, Λ = eigvals(M), eigvecs(M)
-    p = sortperm(abs.(λ), rev=true)
+    λ, Λ = eigvals(M), eigvecs(M);
+    p = sortperm(abs.(λ), rev=true);
     λ = λ[p];
     Λ = Λ[:,p];
 
@@ -252,7 +247,7 @@ end;
 """
     basis_combination(grid, basis_locs, φ, ϵ, α)
 
-Computes a weighted sum of all basis functions, according to `alpha`.
+Computes a weighted sum of all basis functions, according to α.
 
 Returns a vector of length n, where n is the number of gridpoints.
 
