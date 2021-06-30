@@ -1,7 +1,9 @@
-using LinearAlgebra, Distributions, Distances
+using LinearAlgebra, Distributions, Distances, Printf, Plots
 
 include("nnlsq.jl")
 include("nnlsq_pen.jl")
+
+pyplot();
 
 """
     creategrid(min, max, resolution)
@@ -173,17 +175,17 @@ function integrate_phiy(Y::Array{Float64, 2}, basis_locs::Array{Float64, 2}, ran
 end;
 
 """
-    construct_T(w, Φ, Ξ, c)
+    construct_P(w, Φ, Ξ, c)
 
-Constructs the estimated matrix T, using the weights `w`, the sample evaluation matrix `Φ`, and the integral values `Ξ`, with integral weights `c`.
+Constructs the estimated matrix P, using the weights `w`, the sample evaluation matrix `Φ`, and the integral values `Ξ`, with integral weights `c`.
 
 Returns an m × m matrix, where m is the number of bases.
 """
-function construct_T(w::Vector{Float64}, Φ::Array{Float64, 2}, Ξ::Array{Float64, 2}, c::Number)
+function construct_P(w::Vector{Float64}, Φ::Array{Float64, 2}, Ξ::Array{Float64, 2}, c::Number)
     n_bases = size(Φ, 1);
     sample_size = size(Φ, 2);
 
-    T = Array{Float64}(undef, n_bases, n_bases);
+    P = Array{Float64}(undef, n_bases, n_bases);
     for b in 1:n_bases
         for k in 1:n_bases
             val = 0;
@@ -191,10 +193,10 @@ function construct_T(w::Vector{Float64}, Φ::Array{Float64, 2}, Ξ::Array{Float6
                 val += w[n] * Φ[b,n] * Ξ[n,k];
             end
             val = (1/(c^2)) * val;
-            T[b,k] = val;
+            P[b,k] = val;
         end
     end
-    return T
+    return P
 end;
 
 """
@@ -205,7 +207,7 @@ Combines all of the helper functions into a single API for estimating the matrix
 Returns T.
 
 """
-function estimate_T(grid::Array{Float64, 2}, sample::Array{Float64, 2}, basis_grid_size::Integer, ϵ::Number, range::Number=2π, integral_resolution::Integer=100; map_type="standard")
+function estimate_P(grid::Array{Float64, 2}, sample::Array{Float64, 2}, basis_grid_size::Integer, ϵ::Number=range/basis_grid_size, range::Number=2π, integral_resolution::Integer=100; map_type="standard")
 
     c = π * ϵ^2;
 
@@ -224,8 +226,21 @@ function estimate_T(grid::Array{Float64, 2}, sample::Array{Float64, 2}, basis_gr
 
     Ξ = integrate_phiy(Y, basis_locs, range, integral_resolution, φ, ϵ);
 
-    T = construct_T(w, Φ, Ξ, c)
-    return T
+    P = construct_P(w, Φ, Ξ, c)
+
+    output = Dict(
+        "grid"=>grid,
+        "sample"=>sample,
+        "basis_grid_size"=>basis_grid_size,
+        "basis_locs"=>basis_locs,
+        "ϵ"=>ϵ,
+        "range"=>range,
+        "integral_resolution"=>integral_resolution,
+        "map_type"=>map_type,
+        "P"=>P
+    )
+
+    return output
 end;
 
 """
@@ -265,4 +280,119 @@ function basis_combination(grid::Array{Float64, 2}, basis_locs::Array{Float64, 2
     end
     evaluation_surface = sum(evaluation_matrix, dims=2)[:];
     return evaluation_surface
+end;
+
+
+"""
+    P_diagnostics()
+
+Returns a number of diagnostic tests on the estimate P, including several visualisations.
+
+"""
+function P_diagnostics(output, folder)
+    grid = output["grid"];
+    sample = output["sample"];
+    basis_grid_size = output["basis_grid_size"];
+    basis_locs = output["basis_locs"];
+    ϵ = output["ϵ"];
+    range = output["range"];
+    integral_resolution = output["integral_resolution"];
+    map_type = output["map_type"];
+    P = output["P"]
+
+    n_bases = basis_grid_size ^ 2;
+    n_gridpoints = size(grid, 1);
+    sample_size = size(sample,1);
+
+    output_string = string("exp-$n_gridpoints-$sample_size-$n_bases-$(@sprintf("%.2f", ϵ))-$(@sprintf("%.2f", range))-$integral_resolution-$map_type");
+    output_string = string(folder, "/", output_string);
+
+    # Start by showing the basis surface
+    basis_evaluation_matrix = Array{Float64}(undef, n_gridpoints, n_bases);
+    for b in 1:n_bases
+        for n in 1:n_gridpoints
+            basis_evaluation_matrix[n, b] = φ(grid[n, :], basis_locs[b, :], ϵ);
+        end
+    end
+
+    basis_surface = sum(basis_evaluation_matrix, dims=2)[:];
+    surface(grid[:,1], grid[:,2], basis_surface; legend=false);
+    zlims!(0,maximum(basis_surface)*1.1);
+    title!("Basis surface")
+    savefig(string("estimations/", output_string, "-basis_surface.pdf"))
+
+    # Then a sample surface
+    β = rand(n_bases)
+    test_surface = basis_combination(grid, basis_locs, φ, ϵ, β);
+    surface(grid[:,1], grid[:,2], test_surface; legend=false);
+    title!("Sample function");
+    savefig(string("estimations/", output_string, "-sample_surface.pdf"));
+
+    # Next the eigendecomposition
+    λ, Λ = ordered_eigendecomp(P);
+
+    u, v = real.(λ), imag.(λ);
+    xc, yc = cos.(LinRange(0, 2π, 500)), sin.(LinRange(0, 2π, 500));
+
+    scatter(u, v, label="eigenvalues");
+    plot!(xc, yc, label="unit circle");
+    title!("Spectrum (leading eigenvalue: $(λ[1]))");
+    savefig(string("estimations/", output_string, "-eig_decomp.pdf"));
+
+    # Then the row and column sums
+    row_sums = sum(P, dims=2)[:];
+    col_sums = sum(P, dims=1)[:];
+
+    plot(row_sums, label="row sums");
+    plot!(col_sums, label="column sums");
+    xlabel!("index");
+    ylabel!("sum");
+    title!("Row and column sums");
+    savefig(string("estimations/", output_string, "-row_col_sums.pdf"));
+
+    # Then the invariant density
+    α = real.(Λ[:,1]);
+    invariant_density = basis_combination(grid, basis_locs, φ, ϵ, α);
+
+    surface(grid[:,1], grid[:,2], invariant_density; legend=false);
+    if mean(invariant_density) > 0
+        zlims!(0, maximum(invariant_density)*1.1);
+    else
+        zlims!(minimum(invariant_density)*1.1, 0);
+    end
+    title!("Estimate of invariant density");
+    savefig(string("estimations/", output_string, "-invariant_density.pdf"));
+
+    # Last, show the evolution of a function
+    β = rand(n_bases);
+    initial_density = basis_combination(grid, basis_locs, φ, ϵ, β);
+    init = surface(grid[:,1], grid[:,2], initial_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    title!("Random initial function");
+    savefig(string("estimations/", output_string, "-evolution_0.pdf"))
+
+    β1 = P * β;
+    evolved_density = basis_combination(grid, basis_locs, φ, ϵ, β1);
+    p1 = surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    title!("1 applications of P");
+    savefig(string("estimations/", output_string, "-evolution_1.pdf"))
+
+    β2 = P * β1;
+    evolved_density = basis_combination(grid, basis_locs, φ, ϵ, β2);
+    p2 = surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    title!("2 applications of P");
+    savefig(string("estimations/", output_string, "-evolution_2.pdf"));
+
+    β3 = P * β2;
+    evolved_density = basis_combination(grid, basis_locs, φ, ϵ, β3);
+    p3 = surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    title!("3 applications of P");
+    savefig(string("estimations/", output_string, "-evolution_3.pdf"));
+
+    β4 = P * β3;
+    evolved_density = basis_combination(grid, basis_locs, φ, ϵ, β4);
+    p4 = surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    title!("4 applications of P");
+    savefig(string("estimations/", output_string, "-evolution_4.pdf"));
+
+
 end;
