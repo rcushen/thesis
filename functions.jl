@@ -1,4 +1,4 @@
-using LinearAlgebra, Distributions, Distances, Printf, Plots
+using LinearAlgebra, Distributions, Distances, NearestNeighbors, Printf, Plots
 
 include("nnlsq.jl")
 include("nnlsq_pen.jl")
@@ -115,23 +115,36 @@ Output is a real scalar.
 φ(x::Vector{Float64}, z::Vector{Float64}, ϵ::Number) =  exp( -1 * ( peuclidean(x, z, [2π, 2π]) / ϵ ) ^ 2 );
 
 """
-    evaluate_phi(sample, basis_locs, φ, ϵ)
+    mean_NN_distance(X)
 
-Returns the evaluation matrix of `φ` of all points in `sample` against all basis functions, specified by `basis_locs`.
+Returns the mean distance of the nearest neighbour for each point in `X`.
 
-Output is an m × n matrix, where m is the number of bases and n is the number of data points.
+Output is a real scalar.
 """
-function evaluate_phi(sample::Array{Float64, 2}, basis_locs::Array{Float64, 2}, φ, ϵ::Number)
-    n_bases = size(basis_locs, 1);
+function mean_NN_distance(X::Array{Float64, 2})
+    btree = BruteTree(X');
+    idxs, dsts = knn(btree, X', 2);
+    neighbour_distances = [dsts[n][1] for n in 1:size(dsts, 1)];
+    return mean(neighbour_distances)
+end
+"""
+    evaluate_funcs(sample, func_locs, φ, ϵ)
+
+Returns the evaluation matrix of `φ` of all points in `sample` against all ϕ functions, specified by `func_locs`.
+
+Output is an m × n matrix, where m is the number of functions and n is the number of data points.
+"""
+function evaluate_funcs(sample::Array{Float64, 2}, func_locs::Array{Float64, 2}, φ, ϵ::Number)
+    n_funcs = size(func_locs, 1);
     sample_size = size(sample, 1);
 
-    Φ = Array{Float64}(undef, n_bases, sample_size);
-    for b in 1:n_bases
+    Ψ = Array{Float64}(undef, n_funcs, sample_size);
+    for b in 1:n_funcs
         for n in 1:sample_size
-            Φ[b, n] = φ(sample[n, :], basis_locs[b,:], ϵ);
-        end
-    end
-    return Φ
+            Ψ[b, n] = φ(sample[n, :], func_locs[b,:], ϵ);
+        end;
+    end;
+    return Ψ
 end
 
 """
