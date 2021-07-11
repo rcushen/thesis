@@ -230,25 +230,6 @@ function ordered_eigendecomp(M)
 end;
 
 """
-    Lp_norm(γ, c; p="one")
-
-Computes the Lp norm of the function g = `γ`φ, determined by `p`.
-
-Returns a scalar.
-
-"""
-function Lp_norm(γ, c; p="one")
-    if p == "one"
-        v = sum(abs.(γ)) * c
-    elseif p == "∞"
-        v = maximum(abs.(γ))
-    else
-        throw(ArgumentError(map_type, "unsupported p"))
-    end;
-    return v
-end;
-
-"""
     basis_combination(grid, basis_locs, φ, ϵ, α)
 
 Computes a weighted sum of all basis functions, according to `α`.
@@ -271,6 +252,29 @@ function basis_combination(grid::Array{Float64, 2}, basis_locs::Array{Float64, 2
 end;
 
 """
+    Lp_norm(surf; p="one")
+
+Computes the Lp norm of the function g with surface given by surf.
+
+Returns a scalar.
+
+"""
+function Lp_norm(surf, range::Number=2π; p="one")
+    n_gridpoints = size(surf, 1);
+    integral_weights = range^2 / n_gridpoints;
+    if p == "one"
+        v = integral_weights * sum(abs.(surf));
+    elseif p == "two"
+        v = sqrt(integral_weights * sum(surf .^2));
+    elseif p == "∞"
+        v = maximum(abs.(surf))
+    else
+        throw(ArgumentError(map_type, "unsupported p"))
+    end;
+    return v
+end;
+
+"""
     estimate_P(state_space, sample_size, S, φ, ϵ, basis_grid_size, integral_resolution; dist)
 
 Combines all of the helper functions into a single API for estimating the matrix P.
@@ -278,37 +282,79 @@ Combines all of the helper functions into a single API for estimating the matrix
 Returns T.
 
 """
-function estimate_P(grid::Array{Float64, 2}, sample::Array{Float64, 2}, basis_grid_size::Integer, ϵ::Number=range/basis_grid_size, range::Number=2π, integral_resolution::Integer=100; map_type="standard")
+function estimate_P(grid::Array{Float64, 2}, sample_size::Integer, range::Number=2π, k::Number=0.0, integral_resolution::Integer=100; setup, map_type="standard")
 
-    c = π * ϵ^2;
+    if setup == "grid"
 
-    X = sample;
-    Y = S(X; map_type);
+        sample_grid_size = Int(floor(sqrt(sample_size)));
+        if sample_grid_size ^ 2 != sample_size
+            throw(ArgumentError(map_type, "invalid sample size"))
+        end;
+        s = creategrid(0, range, sample_grid_size);
 
-    basis_locs = creategrid(0, range, basis_grid_size);
-    n_bases = basis_grid_size ^ 2;
+        X = s;
+        Y = S(X; map_type);
 
-    Ψ = evaluate_funcs(X, basis_locs, φ, ϵ);
-    C = c * ones(n_bases);
-    w_av = (range^2)/n_bases;
-    w, residual, objvalue = nnlsq_pen(Ψ, C, w_av, 0.01);
+        basis_locs = X;
+        n_bases = sample_size;
+        basis_grid_size = sample_grid_size;
 
-    Ξ = integrate_phiy(Y, basis_locs, range, integral_resolution, φ, ϵ);
+        ϵ = range / basis_grid_size;
+        c = π * ϵ^2;
 
-    Φ = evaluate_funcs(X, basis_locs, φ, ϵ);
-    P = construct_P(w, Φ, Ξ, c)
+        w = range^2 / sample_size * ones(sample_size);
+
+        Ξ = integrate_phiy(Y, basis_locs, range, integral_resolution, φ, ϵ);
+        Φ = evaluate_funcs(X, basis_locs, φ, ϵ);
+        P = construct_P(w, Φ, Ξ, c);
+
+    elseif setup == "scattered"
+
+        s = sampledist(sample_size);
+
+        X = s;
+        Y = S(X; map_type);
+
+        basis_locs = X;
+        n_bases = sample_size;
+
+        ϵ = max_NN_distance(X);
+        c = π * ϵ^2;
+
+        test_function_grid_size = 50;
+        n_test_functions = test_function_grid_size ^ 2;
+        test_function_locs = creategrid(0, range, test_function_grid_size);
+
+        ϵ_test_functions = ϵ;
+
+        Ψ = evaluate_funcs(X, test_function_locs, φ, ϵ_test_functions);
+        c_test = π * ϵ_test_functions^2;
+        C = c_test * ones(n_test_functions);
+        w_av = (range^2) / sample_size;
+
+        w, residual, objvalue = nnlsq_pen(Ψ, C, w_av, k);
+
+        Ξ = integrate_phiy(Y, basis_locs, range, integral_resolution, φ, ϵ);
+        Φ = evaluate_funcs(X, basis_locs, φ, ϵ);
+        P = construct_P(w, Φ, Ξ, c);
+
+    else
+        throw(ArgumentError(map_type, "unsupported setup"))
+    end;
 
     output = Dict(
         "grid"=>grid,
-        "sample"=>sample,
-        "basis_grid_size"=>basis_grid_size,
+        "X"=>X,
+        "Y"=>Y,
         "basis_locs"=>basis_locs,
         "ϵ"=>ϵ,
         "c"=>c,
         "range"=>range,
         "integral_resolution"=>integral_resolution,
+        "setup"=>setup,
         "map_type"=>map_type,
-        "P"=>P
+        "P"=>P,
+        "w"=>w
     )
     return output
 end;
@@ -319,24 +365,24 @@ end;
 Returns a number of diagnostic tests on the estimate P, including several visualisations.
 
 """
-function P_diagnostics(output, folder)
+function P_diagnostics(output)
     grid = output["grid"];
-    sample = output["sample"];
-    basis_grid_size = output["basis_grid_size"];
+    X = output["X"];
     basis_locs = output["basis_locs"];
     ϵ = output["ϵ"];
     c = output["c"];
     range = output["range"];
     integral_resolution = output["integral_resolution"];
+    setup = output["setup"];
     map_type = output["map_type"];
-    P = output["P"]
+    P = output["P"];
+    w = output["w"];
 
-    n_bases = basis_grid_size ^ 2;
     n_gridpoints = size(grid, 1);
-    sample_size = size(sample,1);
+    sample_size = size(X,1);
+    n_bases = sample_size;
 
-    output_string = string("exp-$n_gridpoints-$sample_size-$n_bases-$(@sprintf("%.2f", ϵ))-$(@sprintf("%.2f", range))-$integral_resolution-$map_type");
-    output_string = string(folder, "/", output_string);
+    output_string = string("exp-$setup-$map_type-$sample_size-$integral_resolution");
 
     metrics = Dict()
 
@@ -352,17 +398,26 @@ function P_diagnostics(output, folder)
     surface(grid[:,1], grid[:,2], basis_surface; legend=false);
     zlims!(0,maximum(basis_surface)*1.1);
     title!("Basis surface")
-    savefig(string("estimations/", output_string, "-basis_surface.pdf"))
+    savefig(string("estimations/", output_string, "-1_basis_surface.pdf"))
 
-    integral = (2π)^2 * sum(basis_surface) / n_gridpoints;
-    η = ones(n_bases) / integral;
+    # Then a sample surface, for the grid setup
+    if setup == "grid"
+        β = rand(n_bases)
+        test_surface = basis_combination(grid, basis_locs, φ, ϵ, β);
+        surface(grid[:,1], grid[:,2], test_surface; legend=false);
+        title!("Sample function");
+        savefig(string("estimations/", output_string, "-1_sample_surface.pdf"));
+    end;
 
-    # Then a sample surface
-    β = rand(n_bases)
-    test_surface = basis_combination(grid, basis_locs, φ, ϵ, β);
-    surface(grid[:,1], grid[:,2], test_surface; legend=false);
-    title!("Sample function");
-    savefig(string("estimations/", output_string, "-sample_surface.pdf"));
+    # And a plot of the Lebesgue surface, for the scattered setup
+    if setup == "scattered"
+        weighted_surface = basis_combination(grid, basis_locs, φ, ϵ, w);
+        surface(grid[:,1], grid[:,2], weighted_surface; legend=false)
+        scatter!(X[:,1], X[:,2], zeros(sample_size))
+        zlims!(0, maximum(weighted_surface)*1.1)
+        savefig(string("estimations/", output_string, "-1_lebesgue_surface.pdf"));
+    end;
+
 
     # Next the eigendecomposition
     λ, Λ = ordered_eigendecomp(P);
@@ -373,7 +428,7 @@ function P_diagnostics(output, folder)
     scatter(u, v, label="eigenvalues");
     plot!(xc, yc, label="unit circle");
     title!("Spectrum (leading eigenvalue: $(λ[1]))");
-    savefig(string("estimations/", output_string, "-eig_decomp.pdf"));
+    savefig(string("estimations/", output_string, "-2_eig_decomp.pdf"));
 
     # Then the row and column sums
     row_sums = sum(P, dims=2)[:];
@@ -384,65 +439,120 @@ function P_diagnostics(output, folder)
     xlabel!("index");
     ylabel!("sum");
     title!("Row and column sums");
-    savefig(string("estimations/", output_string, "-row_col_sums.pdf"));
+    savefig(string("estimations/", output_string, "-3_row_col_sums.pdf"));
 
     # Then the invariant density
     α = real.(Λ[:,1]);
     α = abs.(α);
-    invariant_density = basis_combination(grid, basis_locs, φ, ϵ, α);
 
-    surface(grid[:,1], grid[:,2], invariant_density; legend=false);
-    zlims!(0, maximum(invariant_density)*1.1);
-    title!("Estimate of invariant density");
-    savefig(string("estimations/", output_string, "-invariant_density.pdf"));
+    estimated_invariant_density = basis_combination(grid, basis_locs, φ, ϵ, α);
+    integral = (range^2) * sum(estimated_invariant_density) / n_gridpoints;
+    α_normalised = α / integral;
+    estimated_invariant_density_normalised = basis_combination(grid, basis_locs, φ, ϵ, α_normalised);
 
-    l1 = Lp_norm(α - η, c; p="one");
-    l∞ = Lp_norm(α - η, c; p="∞");
+    surface(grid[:,1], grid[:,2], estimated_invariant_density_normalised; legend=false);
+    zlims!(0, maximum(estimated_invariant_density_normalised)*1.1);
+    title!("Normalised estimate of invariant density");
+    savefig(string("estimations/", output_string, "-4_invariant_density_estimate.pdf"));
 
-    metrics["α"] = α;
-    metrics["η"] = η;
-    metrics["l1"] = l1;
-    metrics["l∞"] = l∞;
+    # Calculate the convergence metrics
+    if setup == "grid"
+        integral = (range^2) * sum(basis_surface) / n_gridpoints;
+        η = ones(n_bases) / integral;
+    elseif setup == "scattered"
+        integral = (range^2) * sum(weighted_surface) / n_gridpoints;
+        η = w / integral;
+    end;
+
+    approximate_invariant_density = basis_combination(grid, basis_locs, φ, ϵ, η);
+    estimation_gap = estimated_invariant_density_normalised - approximate_invariant_density;
+
+    constant_function = ones(n_gridpoints) / (range^2);
+    approximation_gap = approximate_invariant_density - constant_function;
+
+    metrics["estimation_l1"] = Lp_norm(estimation_gap; p="one");
+    metrics["estimation_l2"] = Lp_norm(estimation_gap; p="two");
+    metrics["estimation_l∞"] = Lp_norm(estimation_gap; p="∞");
+
+    metrics["approximation_l1"] = Lp_norm(approximation_gap; p="one");
+    metrics["approximation_l2"] = Lp_norm(approximation_gap; p="two");
+    metrics["approximation_l∞"] = Lp_norm(approximation_gap; p="∞");
 
     # Last, show the evolution of a function
 
     β = rand(n_bases)
     initial_density = basis_combination(grid, basis_locs, φ, ϵ, β);
-    integral = (2π)^2 * sum(initial_density) / n_gridpoints;
+    integral = (range)^2 * sum(initial_density) / n_gridpoints;
     β = β / integral;
     initial_density = basis_combination(grid, basis_locs, φ, ϵ, β);
-    integral = (2π)^2 * sum(initial_density) / n_gridpoints;
-    init = surface(grid[:,1], grid[:,2], initial_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    integral = (range)^2 * sum(initial_density) / n_gridpoints;
+    surface(grid[:,1], grid[:,2], initial_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
     title!("Random initial function (int: $integral)");
-    savefig(string("estimations/", output_string, "-evolution_0.pdf"))
+    savefig(string("estimations/", output_string, "-5_evolution_0.pdf"))
 
     β1 = P * β;
     evolved_density = basis_combination(grid, basis_locs, φ, ϵ, β1);
-    integral = (2π)^2 * sum(evolved_density) / n_gridpoints;
-    p1 = surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    integral = (range)^2 * sum(evolved_density) / n_gridpoints;
+    surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
     title!("1 applications of P (int: $integral)");
-    savefig(string("estimations/", output_string, "-evolution_1.pdf"))
+    savefig(string("estimations/", output_string, "-5_evolution_1.pdf"))
 
     β2 = P * β1;
     evolved_density = basis_combination(grid, basis_locs, φ, ϵ, β2);
-    integral = (2π)^2 * sum(evolved_density) / n_gridpoints;
+    integral = (range)^2 * sum(evolved_density) / n_gridpoints;
     p2 = surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
     title!("2 applications of P (int: $integral)");
-    savefig(string("estimations/", output_string, "-evolution_2.pdf"));
+    savefig(string("estimations/", output_string, "-5_evolution_2.pdf"));
 
     β3 = P * β2;
     evolved_density = basis_combination(grid, basis_locs, φ, ϵ, β3);
-    integral = (2π)^2 * sum(evolved_density) / n_gridpoints;
-    p3 = surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    integral = (range)^2 * sum(evolved_density) / n_gridpoints;
+    surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
     title!("3 applications of P (int: $integral)");
-    savefig(string("estimations/", output_string, "-evolution_3.pdf"));
+    savefig(string("estimations/", output_string, "-5_evolution_3.pdf"));
 
     β4 = P * β3;
     evolved_density = basis_combination(grid, basis_locs, φ, ϵ, β4);
-    integral = (2π)^2 * sum(evolved_density) / n_gridpoints;
-    p4 = surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
+    integral = (range)^2 * sum(evolved_density) / n_gridpoints;
+    surface(grid[:,1], grid[:,2], evolved_density; legend=false, zlims=(0, maximum(initial_density)*1.1));
     title!("4 applications of P (int: $integral)");
-    savefig(string("estimations/", output_string, "-evolution_4.pdf"));
+    savefig(string("estimations/", output_string, "-5_evolution_4.pdf"));
 
     return metrics
+end;
+
+"""
+    plot_metrics(results, sample_sizes, series)
+
+Plots metrics from the results of an experiment captured in `results`, specified by `series`.
+
+"""
+
+function plot_metrics(results, sample_sizes, series)
+    n_exps = length(sample_sizes);
+
+    if series == "estimation"
+        estimation_l1s = [results[n]["estimation_l1"] for n in 1:n_exps];
+        estimation_l2s = [results[n]["estimation_l2"] for n in 1:n_exps];
+        estimation_l∞s = [results[n]["estimation_l∞"] for n in 1:n_exps];
+
+        plot(sample_sizes, estimation_l1s, label="l1", markershape=:circle)
+        plot!(sample_sizes, estimation_l2s, label="l2", markershape=:circle)
+        plot!(sample_sizes, estimation_l∞s, label="l∞", markershape=:circle)
+        title!("Estimation error to invariant density")
+        xlabel!("N");
+        ylabel!("norm");
+
+    elseif series == "approximation"
+        approximation_l1s = [results[n]["approximation_l1"] for n in 1:n_exps];
+        approximation_l2s = [results[n]["approximation_l2"] for n in 1:n_exps];
+        approximation_l∞s = [results[n]["approximation_l∞"] for n in 1:n_exps];
+
+        plot(sample_sizes, approximation_l1s, label="l1", markershape=:circle)
+        plot!(sample_sizes, approximation_l2s, label="l2", markershape=:circle)
+        plot!(sample_sizes, approximation_l∞s, label="l∞", markershape=:circle)
+        title!("Approximation error to invariant density")
+        xlabel!("N");
+        ylabel!("norm");
+    end;
 end;
