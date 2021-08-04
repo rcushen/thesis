@@ -30,7 +30,7 @@ function estimate_P(grid::Array{Float64, 2}, sample_size::Integer, range::Number
         n_bases = sample_size;
         basis_grid_size = sample_grid_size;
 
-        ϵ = 2 * range / basis_grid_size;
+        ϵ = 1 * range / basis_grid_size;
         c = π * ϵ^2;
 
         w = range^2 / sample_size * ones(sample_size);
@@ -49,7 +49,7 @@ function estimate_P(grid::Array{Float64, 2}, sample_size::Integer, range::Number
         basis_locs = X;
         n_bases = sample_size;
 
-        ϵ = max_NN_distance(X, 1.25);
+        ϵ = max_NN_distance(X, 1.3);
         c = π * ϵ^2;
 
         test_function_grid_size = 50;
@@ -229,7 +229,7 @@ function P_diagnostics(output, visuals=false)
         true_invariant_density = ones(n_gridpoints) / (range^2);
     elseif map_type == "wave"
         xxs = LinRange(0, range, grid_size);
-        yys = cos.(xxs) .+ 1;
+        yys = ((0.5 * cos.(xxs)) .+ 1) ./ ((range)^2 );
         wave_surface = repeat(yys, inner=grid_size);
         wave_surface_integral = (range^2 / n_gridpoints) * sum(wave_surface)
         wave_surface_normalised = wave_surface ./ wave_surface_integral
@@ -322,10 +322,9 @@ function plot_metrics(results, sample_sizes, series)
         estimation_l2s = [results[n]["estimation_l2"] for n in 1:n_exps];
         estimation_l∞s = [results[n]["estimation_l∞"] for n in 1:n_exps];
 
-        plot(sample_sizes, estimation_l1s, label="l1", markershape=:circle, yaxis=:log)
-        plot!(sample_sizes, estimation_l2s, label="l2", markershape=:circle, yaxis=:log)
-        plot!(sample_sizes, estimation_l∞s, label="l∞", markershape=:circle, yaxis=:log)
-        title!("Estimation error to invariant density")
+        plot(sample_sizes, estimation_l1s, label="L1", markershape=:circle, yaxis=:log)
+        plot!(sample_sizes, estimation_l2s, label="L2", markershape=:circle, yaxis=:log)
+        plot!(sample_sizes, estimation_l∞s, label="L∞", markershape=:circle, yaxis=:log)
         xlabel!("N");
         ylabel!("norm");
 
@@ -334,14 +333,20 @@ function plot_metrics(results, sample_sizes, series)
         approximation_l2s = [results[n]["approximation_l2"] for n in 1:n_exps];
         approximation_l∞s = [results[n]["approximation_l∞"] for n in 1:n_exps];
 
-        plot(sample_sizes, approximation_l1s, label="l1", markershape=:circle, yaxis=:log)
-        plot!(sample_sizes, approximation_l2s, label="l2", markershape=:circle, yaxis=:log)
-        plot!(sample_sizes, approximation_l∞s, label="l∞", markershape=:circle, yaxis=:log)
-        title!("Approximation error to invariant density")
+        plot(sample_sizes, approximation_l1s, label="L1", markershape=:circle, yaxis=:log)
+        plot!(sample_sizes, approximation_l2s, label="L2", markershape=:circle, yaxis=:log)
+        plot!(sample_sizes, approximation_l∞s, label="L∞", markershape=:circle, yaxis=:log)
         xlabel!("N");
         ylabel!("norm");
     end;
 end;
+
+"""
+    average_the_results(results)
+
+Averages the results of a randomised experiment.
+
+"""
 
 function average_the_results(results)
     n_experiments = length(results);

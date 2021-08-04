@@ -72,10 +72,8 @@ Output is a transformed matrix S(X) of same size.
 """
 function S(X::Array{Float64, 2}, a::Number=1.0, δ::Number=1.0, b::Number=0.5; map_type="standard")
     if map_type == "standard"
-        y = X[:,2] + a * sin.(X[:,1]);
-        x = X[:,1] + y;
-        #x = X[:,1] + X[:,2];
-        #y = X[:,2] + (a * sin.(x));
+        x = X[:,1] + X[:,2];
+        y = X[:,2] + (a * sin.(x));
         result = [x y];
         result = mod.(result, 2π);
     elseif map_type == "cat"
@@ -104,7 +102,7 @@ function S(X::Array{Float64, 2}, a::Number=1.0, δ::Number=1.0, b::Number=0.5; m
             sample_size = size(X, 1);
             xprimes = Vector{Float64}(undef, sample_size);
             for n in 1:sample_size
-                f(x) = x + sin(x) - X[n,1];
+                f(x) = x + b * sin(x) - X[n,1];
                 xprimes[n] = find_zero(f, (-2π, 2π))
             end;
             result = [xprimes X[:,2]]
